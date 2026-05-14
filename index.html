@@ -310,10 +310,13 @@ body::before{content:'';position:fixed;inset:0;background-image:url("data:image/
       <button class="taste-btn on-salato" id="taste-salato" onclick="setTaste('salato')">🧂 Salato</button>
       <button class="taste-btn" id="taste-dolce" onclick="setTaste('dolce')">🍯 Dolce</button>
     </div>
-    <div class="tolerance-row">
-      <span class="tolerance-label">Tolleranza kcal</span>
-      <input type="range" id="tolerance" min="20" max="200" value="80" step="10" oninput="document.getElementById('tol-val').textContent='±'+this.value"/>
-      <span class="tolerance-val" id="tol-val">±80</span>
+    <div style="display:flex;gap:8px;margin-bottom:14px;">
+      <button style="flex:1;padding:11px 14px;border-radius:var(--r);border:1px solid var(--border);background:var(--glass);color:var(--text2);font-size:13px;cursor:pointer;font-family:'DM Sans',sans-serif;transition:all .2s;text-align:left;display:flex;align-items:center;gap:8px;" onclick="openMacroSheet()">
+        ⚖️ Personalizza macro <span style="margin-left:auto;color:var(--text3);font-size:11px;">▾</span>
+      </button>
+      <button style="padding:11px 14px;border-radius:var(--r);border:1px solid var(--border);background:var(--glass);color:var(--text2);font-size:13px;cursor:pointer;font-family:'DM Sans',sans-serif;transition:all .2s;white-space:nowrap;" onclick="openFoodDB()">
+        🔍 kcal alimenti
+      </button>
     </div>
     <div id="macro-sheet-area"></div>
     <button class="btn-cerca" onclick="cercaRicette()">🔍 Trova ricette per i miei macro</button>
@@ -593,39 +596,154 @@ function switchTab(name,btn){
   if(name==='salvate')renderSaved();
 }
 
+/* ════════════════════════════════════════════════
+   TABELLA KCAL PER 100g — alimenti comuni
+   Usata per calcolare kcal ingrediente quando
+   lo staff non le inserisce manualmente
+════════════════════════════════════════════════ */
+const KCAL_PER_100G = {
+  /* PROTEINE ANIMALI */
+  'petto di pollo':165,'pollo':165,'tacchino':157,'manzo magro':143,
+  'bistecca':172,'carne macinata':215,'maiale magro':145,'prosciutto cotto':145,
+  'tonno al naturale':116,'tonno':116,'salmone':208,'merluzzo':82,
+  'gamberi':85,'polpo':82,'calamari':92,'orata':109,'branzino':97,
+  'uova':143,'uovo':143,'albume':52,
+  /* LATTICINI */
+  'ricotta':174,'mozzarella':253,'parmigiano':392,'grana':392,
+  'yogurt greco':97,'skyr':63,'fiocchi di latte':72,
+  'latte scremato':34,'latte intero':61,'kefir':52,
+  /* CARBOIDRATI */
+  'pasta':350,'pasta integrale':343,'spaghetti':350,'penne':350,
+  'riso':360,'riso basmati':357,'riso integrale':350,
+  'farro':340,'orzo':360,'avena':389,'fiocchi di avena':389,
+  'quinoa':368,'couscous':376,'bulgur':342,
+  'pane integrale':247,'pane':265,'pane di segale':259,
+  'patate':77,'patata':77,'patate dolci':86,'polenta':350,
+  'farina':364,'farina integrale':340,'amido di mais':381,
+  /* LEGUMI */
+  'ceci':364,'lenticchie':352,'fagioli':337,'piselli':84,
+  'edamame':121,'tofu':76,'tempeh':193,
+  /* VERDURE */
+  'zucchine':17,'melanzane':24,'peperoni':31,'pomodori':18,
+  'pomodoro':18,'spinaci':23,'broccoli':34,'cavolfiore':25,
+  'asparagi':20,'fagiolini':31,'carote':41,'sedano':16,
+  'insalata':15,'rucola':25,'cetrioli':15,'funghi':22,
+  'cavolo':25,'verza':27,'carciofi':47,'finocchi':31,
+  /* GRASSI E CONDIMENTI */
+  'olio evo':884,'olio':884,'burro':717,'olio di cocco':862,
+  'avocado':160,'mandorle':579,'noci':654,'nocciole':628,
+  'arachidi':567,'pistacchi':562,'anacardi':553,
+  'semi di lino':534,'semi di chia':486,'semi di girasole':584,
+  'tahini':595,'burro di arachidi':588,
+  /* FRUTTA */
+  'banana':89,'mela':52,'arancia':47,'fragole':32,
+  'mirtilli':57,'lamponi':52,'kiwi':61,'ananas':50,
+  'uva':67,'pesca':39,'pera':57,'melone':34,'anguria':30,
+  'dattero':282,'fico secco':249,'albicocca secca':241,
+  /* DOLCI E ALTRO */
+  'cioccolato fondente':546,'miele':304,'sciroppo dacero':260,
+  'zucchero':387,'cacao':228,'nutella':539,
+  'proteine whey':380,'caseina':360,'protein bar':380,
+  /* SPEZIE / AROMI — trascurabili */
+  'aglio':149,'cipolla':40,'prezzemolo':36,'basilico':23,
+  'rosmarino':131,'origano':265,'sale':0,'pepe':251,
+  'curcuma':354,'paprika':282,'cannella':247,
+};
+
+/* Trova kcal/100g per un ingrediente (ricerca fuzzy) */
+function getKcalPer100g(nome) {
+  const lc = nome.toLowerCase().trim();
+  if (KCAL_PER_100G[lc] !== undefined) return KCAL_PER_100G[lc];
+  for (const [k, v] of Object.entries(KCAL_PER_100G)) {
+    if (lc.includes(k) || k.includes(lc)) return v;
+  }
+  return null;
+}
+
+/* ════════════════════════════════════════════════
+   SCALING ALGORITHM
+   Scala una ricetta dal suo totale kcal originale
+   alle kcal target dell'utente, ricalcolando
+   tutte le grammature proporzionalmente
+════════════════════════════════════════════════ */
+function scaleRecipe(recipe, targetKcal) {
+  const originalKcal = recipe.kcal || 1;
+  const ratio = targetKcal / originalKcal;
+
+  const scaledIngr = (recipe.ingredienti || []).map(i => {
+    const nome = typeof i === 'string' ? i : (i.nome || '');
+    const qtyStr = typeof i === 'string' ? '' : (i.quantita || '');
+    const origKcal = typeof i === 'string' ? null : (i.kcal != null ? +i.kcal : null);
+
+    /* Estrai grammi dalla quantità (es. "150g" → 150) */
+    const grMatch = qtyStr.match(/(\d+(?:\.\d+)?)\s*g\b/i);
+    const mlMatch = qtyStr.match(/(\d+(?:\.\d+)?)\s*ml\b/i);
+    const origGrams = grMatch ? +grMatch[1] : (mlMatch ? +mlMatch[1] : null);
+
+    let newQty = qtyStr;
+    let newKcal = origKcal != null ? origKcal * ratio : null;
+
+    if (origGrams !== null) {
+      const newGrams = Math.round(origGrams * ratio);
+      newQty = qtyStr.replace(/(\d+(?:\.\d+)?)\s*(g|ml)\b/i, `${newGrams}$2`);
+      /* Se lo staff non aveva inserito le kcal, calcolale dal DB */
+      if (origKcal == null) {
+        const kcalPer100 = getKcalPer100g(nome);
+        if (kcalPer100 !== null) newKcal = Math.round((newGrams / 100) * kcalPer100);
+      }
+    } else {
+      /* Quantità non in grammi (es. "1 spicchio", "q.b.") — scala le kcal se disponibili */
+      if (origKcal == null) {
+        const kcalPer100 = getKcalPer100g(nome);
+        newKcal = kcalPer100 !== null && kcalPer100 < 15 ? 0 : null;
+      }
+    }
+
+    return { nome, quantita: newQty, kcal: newKcal != null ? Math.round(newKcal) : null };
+  });
+
+  return {
+    ...recipe,
+    kcal: Math.round(originalKcal * ratio),
+    proteine: Math.round((recipe.proteine || 0) * ratio),
+    carboidrati: Math.round((recipe.carboidrati || 0) * ratio),
+    grassi: Math.round((recipe.grassi || 0) * ratio),
+    ingredienti: scaledIngr,
+    _scaled: true,
+    _originalKcal: originalKcal,
+    _targetKcal: targetKcal,
+  };
+}
+
 /* ════════════════════════
    CERCA RICETTE (dal DB)
 ════════════════════════ */
 async function cercaRicette(){
   const kcal=+document.getElementById('kcal-input').value||S.kcal;
-  const tol=+document.getElementById('tolerance').value||80;
   const out=document.getElementById('output');
-  out.innerHTML=`<div class="loading-state"><div class="spin-ring"></div><div class="loading-txt">Cerco ricette...</div><div class="loading-sub">Filtro per i tuoi macro</div></div>`;
+  out.innerHTML=`<div class="loading-state"><div class="spin-ring"></div><div class="loading-txt">Cerco ricette...</div><div class="loading-sub">Scala le porzioni per ${kcal} kcal</div></div>`;
 
+  /* Prendi TUTTE le ricette del tipo selezionato — lo scaling le adatta */
   const{data,error}=await sb
     .from('staff_recipes')
     .select('*')
     .eq('published',true)
     .eq('recipe->>tipo', S.taste)
-    .gte('recipe->>kcal', kcal - tol)
-    .lte('recipe->>kcal', kcal + tol)
     .order('created_at',{ascending:false});
 
   if(error){out.innerHTML=`<div class="error-box">⚠️ Errore nel caricamento. Riprova.</div>`;return;}
 
   if(!data||data.length===0){
-    out.innerHTML=`<div class="empty-state"><span class="big">🍽️</span>Nessuna ricetta trovata per ${kcal} kcal ±${tol}.<br><small>Prova ad aumentare la tolleranza o aspetta che lo staff aggiunga nuove ricette!</small></div>`;
+    out.innerHTML=`<div class="empty-state"><span class="big">🍽️</span>Nessuna ricetta disponibile.<br><small>Lo staff sta preparando le ricette!</small></div>`;
     return;
   }
 
-  /* ordina per vicinanza alle kcal */
-  const sorted=data.sort((a,b)=>Math.abs(a.recipe.kcal-kcal)-Math.abs(b.recipe.kcal-kcal));
   out.innerHTML='';
-  sorted.forEach(row=>{
-    const r=row.recipe;
-    r._dbId=row.id;
+  data.forEach(row=>{
+    const scaled = scaleRecipe(row.recipe, kcal);
+    scaled._dbId = row.id;
     const div=document.createElement('div');
-    div.innerHTML=buildRecipeCard(r,kcal);
+    div.innerHTML=buildRecipeCard(scaled, kcal);
     out.appendChild(div);
   });
 }
@@ -634,21 +752,28 @@ async function cercaRicette(){
    BUILD RECIPE CARD
 ════════════════════════ */
 function buildRecipeCard(r, targetKcal){
-  const diff=targetKcal?Math.abs(r.kcal-targetKcal):null;
-  const matchLabel=diff!=null?(diff<=20?'✓ Perfetta':diff<=50?`~${diff} kcal di differenza`:`${diff} kcal di differenza`):'';
   const tasteTag=r.tipo==='dolce'?'<span class="r-tag dolce">🍯 Dolce</span>':'<span class="r-tag">🧂 Salato</span>';
-  const matchTag=diff!=null?`<span class="r-tag match">${matchLabel}</span>`:'';
+  const scaledTag=r._scaled?`<span class="r-tag match">⚖️ Adattata per ${Math.round(r._targetKcal)} kcal</span>`:'';
 
   const ingrRows=(r.ingredienti||[]).map(i=>{
     const nome=typeof i==='string'?i:(i.nome||'');
     const qty=typeof i==='string'?'':(i.quantita||'');
     const ikcal=typeof i==='string'?null:(i.kcal!=null?+i.kcal:null);
+    /* prova a completare le kcal dal DB se mancanti */
+    let displayKcal = ikcal;
+    if (displayKcal == null) {
+      const grMatch = qty.match(/(\d+(?:\.\d+)?)\s*g\b/i);
+      if (grMatch) {
+        const k100 = getKcalPer100g(nome);
+        if (k100 !== null) displayKcal = Math.round((+grMatch[1] / 100) * k100);
+      }
+    }
     const emoji=getEmoji(nome);
     const imgUrl=getImgUrl(nome);
-    const isTrasc=ikcal!=null&&ikcal<10;
-    const badge=ikcal==null?'':isTrasc
+    const isTrasc=displayKcal!=null&&displayKcal<10;
+    const badge=displayKcal==null?'':isTrasc
       ?`<span class="ingr-kcal kcal-trascurabile">trascurabile</span>`
-      :`<span class="ingr-kcal kcal-normal">~${Math.round(ikcal)} kcal</span>`;
+      :`<span class="ingr-kcal kcal-normal">~${Math.round(displayKcal)} kcal</span>`;
     return `<div class="ingr-item">
       <div class="ingr-img-box">
         <img src="${imgUrl}" alt="${nome}" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"/>
@@ -663,14 +788,20 @@ function buildRecipeCard(r, targetKcal){
 
   const saveBtn=isGuest
     ?`<button class="r-action-btn" onclick="promptRegister()">🔒 Accedi per salvare</button>`
-    :`<button class="r-action-btn save-btn" onclick="saveRecipe(${JSON.stringify(r).replace(/"/g,'&quot;')})">🔖 Salva</button>`;
+    :`<button class="r-action-btn save-btn" onclick='saveRecipe(${JSON.stringify(r).replace(/'/g,"&#39;")})'>🔖 Salva</button>`;
+
+  /* nota originale se scalata */
+  const origNote = r._scaled && r._originalKcal
+    ? `<div style="font-size:11px;color:var(--text3);margin-top:8px;position:relative;">Ricetta originale: ${Math.round(r._originalKcal)} kcal · porzioni scalate automaticamente</div>`
+    : '';
 
   return `<div class="recipe-card">
     <div class="r-header">
       <div class="r-header-glow"></div>
-      <div class="r-tags">${tasteTag}${matchTag}</div>
+      <div class="r-tags">${tasteTag}${scaledTag}</div>
       <div class="r-name">${r.nome}</div>
       <div class="r-desc">${r.descrizione||''}</div>
+      ${origNote}
       <div class="r-actions">${saveBtn}</div>
     </div>
     <div class="r-pills">
@@ -827,7 +958,64 @@ function removeIngrLine(btn){
   const p=btn.parentElement;if(p.parentElement.children.length>1)p.remove();
 }
 
-/* ── INIT ── */
+/* ════════════════════════
+   FOOD DB LOOKUP
+════════════════════════ */
+function openFoodDB(){
+  const existing=document.getElementById('food-db-sheet');
+  if(existing){existing.remove();return;}
+
+  const sorted=Object.entries(KCAL_PER_100G).sort((a,b)=>a[0].localeCompare(b[0]));
+  const rows=sorted.map(([nome,kcal])=>{
+    const bar=Math.round((kcal/900)*100);
+    const color=kcal<50?'var(--green)':kcal<200?'var(--teal)':kcal<400?'var(--amber)':'var(--coral)';
+    return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.04);">
+      <span style="font-size:18px;width:28px;flex-shrink:0;">${getEmoji(nome)}</span>
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:13px;color:var(--text);text-transform:capitalize;">${nome}</div>
+        <div style="height:3px;border-radius:2px;background:${color};width:${bar}%;margin-top:4px;opacity:.7;"></div>
+      </div>
+      <span style="font-family:'Syne',sans-serif;font-size:13px;font-weight:700;color:${color};white-space:nowrap;">${kcal} <span style="font-size:10px;font-weight:400;color:var(--text3);">kcal/100g</span></span>
+    </div>`;
+  }).join('');
+
+  const el=document.createElement('div');
+  el.id='food-db-sheet';
+  el.style.cssText='margin-bottom:14px;animation:slideDown .25s ease;';
+  el.innerHTML=`<div class="sheet">
+    <div class="sheet-head">
+      <div>
+        <div class="sheet-title">📊 Valori nutrizionali</div>
+        <div class="sheet-sub">kcal per 100g — usate per scalare le porzioni</div>
+      </div>
+      <button class="sheet-close" onclick="document.getElementById('food-db-sheet').remove()">✕</button>
+    </div>
+    <div style="margin-bottom:12px;">
+      <input type="text" placeholder="Cerca alimento..." oninput="filterFoodDB(this.value)"
+        style="width:100%;background:var(--glass);border:1px solid var(--border);border-radius:10px;padding:10px 14px;color:var(--text);font-family:'DM Sans',sans-serif;font-size:14px;outline:none;"/>
+    </div>
+    <div id="food-db-list" style="max-height:340px;overflow-y:auto;">${rows}</div>
+    <div style="display:flex;gap:8px;margin-top:10px;font-size:11px;color:var(--text3);flex-wrap:wrap;">
+      <span style="color:var(--green)">● basso (&lt;50)</span>
+      <span style="color:var(--teal)">● medio (50–200)</span>
+      <span style="color:var(--amber)">● alto (200–400)</span>
+      <span style="color:var(--coral)">● molto alto (&gt;400)</span>
+    </div>
+  </div>`;
+
+  const area=document.getElementById('macro-sheet-area');
+  area.parentNode.insertBefore(el, area.nextSibling);
+}
+
+function filterFoodDB(q){
+  const lc=q.toLowerCase();
+  const list=document.getElementById('food-db-list');
+  if(!list)return;
+  [...list.children].forEach(row=>{
+    const name=row.querySelector('div')?.textContent?.toLowerCase()||'';
+    row.style.display=name.includes(lc)?'':'none';
+  });
+}
 updateMacroDisplay();
 sb.auth.onAuthStateChange(async(event,session)=>{
   if(event==='SIGNED_IN'&&session&&!currentUser){
